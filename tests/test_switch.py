@@ -155,9 +155,9 @@ ENTITY_LIGHT_2 = "light.light_2"
 ENTITY_LIGHT_3 = "light.light_3"
 _SWITCH_FMT = f"{SWITCH_DOMAIN}.{DOMAIN}"
 ENTITY_SWITCH = f"{_SWITCH_FMT}_{DEFAULT_NAME}"
-ENTITY_SLEEP_MODE_SWITCH = f"{_SWITCH_FMT}_sleep_mode_{DEFAULT_NAME}"
-ENTITY_ADAPT_BRIGHTNESS_SWITCH = f"{_SWITCH_FMT}_adapt_brightness_{DEFAULT_NAME}"
-ENTITY_ADAPT_COLOR_SWITCH = f"{_SWITCH_FMT}_adapt_color_{DEFAULT_NAME}"
+ENTITY_SLEEP_MODE_SWITCH = f"{_SWITCH_FMT}_{DEFAULT_NAME}_sleep_mode"
+ENTITY_ADAPT_BRIGHTNESS_SWITCH = f"{_SWITCH_FMT}_{DEFAULT_NAME}_adapt_brightness"
+ENTITY_ADAPT_COLOR_SWITCH = f"{_SWITCH_FMT}_{DEFAULT_NAME}_adapt_color"
 
 ORIG_TIMEZONE = dt_util.DEFAULT_TIME_ZONE
 
@@ -1092,7 +1092,7 @@ async def test_apply_service(hass):
     assert entity_id not in switch.lights
 
     def increased_brightness():
-        return (light._attr_brightness + 100) % 255
+        return max(1, (light._attr_brightness + 100) % 255)
 
     def increased_color_temp():
         return max(
@@ -3252,6 +3252,38 @@ async def test_detect_non_ha_changes_with_separate_turn_on_commands(hass):
     assert (
         light.brightness == manual_brightness
     ), f"AL overrode manual brightness {manual_brightness} with {al_brightness}"
+
+
+async def test_fresh_install_entity_ids(hass):
+    """Test the entity ids a new install gets with device-relative naming."""
+    _, switch = await setup_switch(hass, {})
+
+    assert switch.entity_id == ENTITY_SWITCH
+    assert switch.sleep_mode_switch.entity_id == ENTITY_SLEEP_MODE_SWITCH
+    assert switch.adapt_brightness_switch.entity_id == ENTITY_ADAPT_BRIGHTNESS_SWITCH
+    assert switch.adapt_color_switch.entity_id == ENTITY_ADAPT_COLOR_SWITCH
+
+
+async def test_existing_entity_ids_are_preserved(hass):
+    """Test an install predating this change keeps its entity ids.
+
+    The unique ids are unchanged, so the entity registry must keep the
+    classic `..._sleep_mode_<name>` id instead of renaming the entity.
+    """
+    classic_entity_id = f"{_SWITCH_FMT}_sleep_mode_{DEFAULT_NAME}"
+    assert classic_entity_id != ENTITY_SLEEP_MODE_SWITCH
+
+    registry = entity_registry.async_get(hass)
+    registry.async_get_or_create(
+        SWITCH_DOMAIN,
+        DOMAIN,
+        f"{DEFAULT_NAME}_sleep_mode",
+        suggested_object_id=classic_entity_id.split(".", 1)[1],
+    )
+
+    _, switch = await setup_switch(hass, {})
+
+    assert switch.sleep_mode_switch.entity_id == classic_entity_id
 
 
 def test_validate_ui_options_win_over_stale_data():
