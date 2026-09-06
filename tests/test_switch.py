@@ -1589,6 +1589,91 @@ async def test_async_update_at_interval_action(hass):
     await switch._async_update_at_interval_action()
 
 
+async def test_stagger_offset_deterministic_and_bounded(hass):
+    """Test switches get stable relative delays within the interval."""
+    interval = datetime.timedelta(seconds=90)
+
+    _, switch_a = await setup_switch(hass, {CONF_NAME: "switch_a"})
+    _, switch_b = await setup_switch(hass, {CONF_NAME: "switch_b"})
+
+    offset_a_1 = switch_a._stagger_offset(interval)
+    offset_a_2 = switch_a._stagger_offset(interval)
+    assert offset_a_1 == offset_a_2
+
+    offset_b = switch_b._stagger_offset(interval)
+    assert offset_a_1 != offset_b
+
+    for offset in (offset_a_1, offset_b):
+        assert datetime.timedelta(0) <= offset < interval
+
+
+async def test_disable_cancels_pending_stagger(hass):
+    """Test disabling the switch cancels delayed interval registration."""
+    switch_module = "homeassistant.components.adaptive_lighting.switch"
+    with (
+        patch(
+            f"{switch_module}.AdaptiveSwitch._stagger_offset",
+            return_value=datetime.timedelta(seconds=10),
+        ) as mock_offset,
+        patch(
+            f"{switch_module}.async_track_time_interval",
+            return_value=lambda: None,
+        ) as mock_track_interval,
+    ):
+        _, switch = await setup_switch(hass, {})
+        mock_offset.return_value = datetime.timedelta(seconds=0.05)
+        switch._update_time_interval_listener()
+        await switch.async_turn_off()
+        await asyncio.sleep(0.1)
+
+    mock_track_interval.assert_not_called()
+
+
+async def test_reconfigure_replaces_stagger_and_preserves_interval(hass):
+    """Test the replacement starts at offset + interval and keeps its cadence."""
+    calls: list[float] = []
+    two_calls = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    stagger = datetime.timedelta(seconds=0.2)
+
+    async def record_interval(_now=None):
+        calls.append(loop.time())
+        if len(calls) == 2:
+            two_calls.set()
+
+    with patch(
+        "homeassistant.components.adaptive_lighting.switch.AdaptiveSwitch._stagger_offset",
+        return_value=datetime.timedelta(seconds=10),
+    ) as mock_offset:
+        _, switch = await setup_switch(hass, {})
+        switch._interval = datetime.timedelta(0)
+        mock_offset.return_value = stagger
+        effective_interval = (
+            switch._interval
+            + datetime.timedelta(milliseconds=switch._send_split_delay)
+            + datetime.timedelta(seconds=0.5)
+        )
+
+        with patch.object(
+            switch,
+            "_async_update_at_interval_action",
+            side_effect=record_interval,
+        ):
+            switch._update_time_interval_listener()
+            await asyncio.sleep(0.02)
+
+            replacement_started = loop.time()
+            switch._update_time_interval_listener()
+            await asyncio.wait_for(two_calls.wait(), timeout=2)
+            await switch.async_turn_off()
+
+    first_delay = calls[0] - replacement_started
+    interval_seconds = effective_interval.total_seconds()
+    expected_first_delay = interval_seconds + stagger.total_seconds()
+    assert expected_first_delay - 0.1 <= first_delay < expected_first_delay + 0.5
+    assert interval_seconds - 0.1 <= calls[1] - calls[0] < interval_seconds + 0.5
+
+
 @pytest.mark.parametrize("separate_turn_on_commands", (True, False))
 async def test_separate_turn_on_commands(hass, separate_turn_on_commands):
     """Test 'separate_turn_on_commands' argument."""

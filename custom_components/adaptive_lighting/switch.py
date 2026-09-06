@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import logging
 import zoneinfo
 from copy import deepcopy
@@ -62,6 +63,7 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.helpers.event import (
     EventStateChangedData,
+    async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -1081,6 +1083,17 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         self.remove_listeners.append(remove_sleep)
         self._expand_light_groups()
 
+    def _stagger_offset(self, adaptation_interval: timedelta) -> timedelta:
+        """Return a stable relative delay to spread periodic updates.
+
+        Hashing the switch ID gives a best-effort spread without configuration.
+        It does not delay the immediate turn-on adaptation or guarantee a minimum
+        gap between switches.
+        """
+        digest = hashlib.sha256(self.unique_id.encode()).digest()
+        fraction = int.from_bytes(digest[:8], byteorder="big") / 2**64
+        return adaptation_interval * fraction
+
     def _update_time_interval_listener(self) -> None:
         """Create or recreate the adaptation interval listener.
 
@@ -1101,11 +1114,25 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             + timedelta(seconds=processing_overhead_time)
         )
 
-        self.remove_interval = async_track_time_interval(
-            self.hass,
-            action=self._async_update_at_interval_action,
-            interval=adaptation_interval,
-        )
+        @callback
+        def _start_periodic_listener(_now: datetime.datetime | None = None) -> None:
+            self.remove_interval = async_track_time_interval(
+                self.hass,
+                action=self._async_update_at_interval_action,
+                interval=adaptation_interval,
+            )
+
+        # Register after the offset. The first periodic tick is at offset +
+        # interval, then subsequent ticks keep the configured interval.
+        offset = self._stagger_offset(adaptation_interval)
+        if offset > timedelta(0):
+            self.remove_interval = async_call_later(
+                self.hass,
+                offset.total_seconds(),
+                _start_periodic_listener,
+            )
+        else:
+            _start_periodic_listener()
 
     def _call_on_remove_callbacks(self) -> None:
         """Call callbacks registered by async_on_remove."""
