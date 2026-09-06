@@ -738,10 +738,19 @@ async def test_manual_control(
     await turn_light(True, brightness=increased_brightness())
     # Check that ENTITY_LIGHT_1 is manually controlled
     assert manual_control[ENTITY_LIGHT_1] == LightControlAttributes.BRIGHTNESS
+    # Per-attribute state attributes should reflect this
+    state_attrs = hass.states.get(switch.entity_id).attributes
+    assert ENTITY_LIGHT_1 in state_attrs["manual_control"]
+    assert ENTITY_LIGHT_1 in state_attrs["manual_control_brightness"]
+    assert ENTITY_LIGHT_1 not in state_attrs["manual_control_color"]
     # Test adaptive_lighting.set_manual_control
     await change_manual_control(False)
     # Check that ENTITY_LIGHT_1 is not manually controlled
     assert not manual_control[ENTITY_LIGHT_1]
+    state_attrs = hass.states.get(switch.entity_id).attributes
+    assert ENTITY_LIGHT_1 not in state_attrs["manual_control"]
+    assert ENTITY_LIGHT_1 not in state_attrs["manual_control_brightness"]
+    assert ENTITY_LIGHT_1 not in state_attrs["manual_control_color"]
 
     # Check that toggling light off to on resets manual control
     await change_manual_control(True)
@@ -865,6 +874,9 @@ async def test_manual_control(
     assert not manual_control[ENTITY_LIGHT_1]
     await change_manual_control(True)
     assert manual_control[ENTITY_LIGHT_1] == LightControlAttributes.ALL
+    state_attrs = hass.states.get(switch.entity_id).attributes
+    assert state_attrs["manual_control_brightness"] == [ENTITY_LIGHT_1]
+    assert state_attrs["manual_control_color"] == [ENTITY_LIGHT_1]
 
     # Check that manual control `False` unsets all attributes
     await change_manual_control(False)
@@ -875,6 +887,9 @@ async def test_manual_control(
     assert manual_control[ENTITY_LIGHT_1] == LightControlAttributes.BRIGHTNESS
     await change_manual_control("color")
     assert manual_control[ENTITY_LIGHT_1] == LightControlAttributes.COLOR
+    state_attrs = hass.states.get(switch.entity_id).attributes
+    assert state_attrs["manual_control_brightness"] == []
+    assert state_attrs["manual_control_color"] == [ENTITY_LIGHT_1]
 
 
 @flaky(max_runs=3, min_passes=1)
