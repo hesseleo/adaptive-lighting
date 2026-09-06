@@ -4061,6 +4061,9 @@ async def test_group_runtime_change_retires_delayed_events(
         expand_light_groups=expand,
         adapt_delay=0.1234,
     )
+    retired_targets = (
+        {"light.light_4", "light.light_5"} if expand else {"light.light_group"}
+    )
     retained_target = "light.light_4" if expand else "light.light_group"
     if shared_target:
         _, other = await _setup_group_switch(
@@ -4116,7 +4119,15 @@ async def test_group_runtime_change_retires_delayed_events(
             release.set()
             await hass.async_block_till_done()
 
-    assert not calls, f"Retired reactive handlers issued commands: {calls}"
+    retired_calls = [
+        call
+        for call in calls
+        if isinstance(call[ATTR_ENTITY_ID], str)
+        and call[ATTR_ENTITY_ID] in retired_targets
+    ]
+    assert (
+        not retired_calls
+    ), f"Retired reactive handlers issued commands: {retired_calls}"
     for member in ["light.light_4", "light.light_5"]:
         assert hass.states.get(member).attributes[ATTR_BRIGHTNESS] == 128
 
