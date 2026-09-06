@@ -16,6 +16,17 @@ Replace every entity ID below with the IDs from your Home Assistant instance. Fr
 
 Blocks that begin with `- alias` are entries for `automations.yaml`. Blocks with a top-level `script:` or `adaptive_lighting:` key are complete `configuration.yaml` examples. If your configuration uses `script: !include scripts.yaml`, omit that outer key and place its contents in `scripts.yaml`.
 
+Four examples also have blueprints with selectors, so you can configure them without editing YAML:
+
+| Blueprint | Purpose |
+| --- | --- |
+| [Sleep mode](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/sleep_mode.yaml) | Synchronize several profiles with one sleep-mode helper. |
+| [Minimum brightness](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/turn_off_at_minimum.yaml) | Turn one light off when its target crosses down to the minimum. |
+| [Schedule profile](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/schedule_profile.yaml) | Apply brightness and color temperature from Schedule helper blocks. |
+| [Daylight limit](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/daylight_limit.yaml) | Lower maximum brightness in strong daylight. |
+
+Copy a blueprint's link into **Settings → Automations & scenes → Blueprints → Import Blueprint**, then create an automation from it. Read the matching example below for setup and behavior. Each blueprint is tested through Home Assistant alongside its YAML example. The built-in manual-control timeout needs no automation; the scripts below remain useful as actions in your own automations.
+
 `change_switch_settings` updates a profile while its main switch is off, but lights are adapted only while that switch is on. It preserves manual-control flags, so manually controlled lights remain paused.
 
 <details markdown="1">
@@ -38,6 +49,8 @@ This is a top-level `configuration.yaml` example. The timer clears manual contro
 <details markdown="1">
 <summary>Toggle multiple Adaptive Lighting switches to "sleep mode" using an <code>input_boolean.sleep_mode</code>.</summary>
 
+Also available as a [blueprint](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/sleep_mode.yaml). Select an input boolean and the sleep-mode switches it should control.
+
 ```yaml
 - alias: "Adaptive lighting: toggle 'sleep mode'"
   trigger:
@@ -57,6 +70,56 @@ This is a top-level `configuration.yaml` example. The timer clears manual contro
           - switch.adaptive_lighting_living_room_sleep_mode
           - switch.adaptive_lighting_bedroom_sleep_mode
 ```
+
+</details>
+
+<details markdown="1">
+<summary>Turn a light off when its adaptive brightness target reaches the minimum.</summary>
+
+Prefer a form over editing YAML? Import the [blueprint](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/turn_off_at_minimum.yaml) in Home Assistant under **Settings → Automations & scenes → Blueprints → Import Blueprint**. Select your profile, its matching adapt brightness switch, one light managed by that profile, and its minimum brightness percentage. Create one automation per light. If you change the profile's minimum later, update the automation too. The blueprint and YAML example below have the same behavior.
+
+The Adaptive Lighting switch already exposes its calculated `brightness_pct` target. Use its state changes to choose a power policy in an automation; no custom event is needed. This example assumes `min_brightness: 1`. Change `minimum_pct` to match your profile, and replace the switch and light entity IDs with your own.
+
+The comparison uses the same rounded 0–255 brightness as an adaptation command. Comparing floating-point percentages for exact equality can miss the minimum between updates. This detects the calculated target reaching its minimum command, not the bulb finishing a transition or reaching its physical dimming limit.
+
+```yaml
+- alias: "Adaptive lighting: turn off at minimum brightness"
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: switch.adaptive_lighting_living_room
+      attribute: brightness_pct
+  conditions:
+    - condition: state
+      entity_id:
+        - switch.adaptive_lighting_living_room
+        - switch.adaptive_lighting_living_room_adapt_brightness
+      state: "on"
+    - condition: template
+      value_template: >-
+        {% set minimum_pct = 1 %}
+        {% set minimum = (minimum_pct * 255 / 100) | round(0) %}
+        {% set before = trigger.from_state.attributes.get('brightness_pct')
+                        if trigger.from_state else none %}
+        {% set after = trigger.to_state.attributes.get('brightness_pct')
+                       if trigger.to_state else none %}
+        {{ is_number(before) and is_number(after)
+           and (before | float * 255 / 100) | round(0) > minimum
+           and (after | float * 255 / 100) | round(0) <= minimum }}
+    - condition: state
+      entity_id: light.living_room
+      state: "on"
+    - condition: template
+      value_template: >-
+        {{ 'light.living_room' not in
+           (state_attr('switch.adaptive_lighting_living_room', 'manual_control') or []) }}
+  actions:
+    - action: light.turn_off
+      target:
+        entity_id: light.living_room
+```
+
+This runs once when a valid target crosses down into the minimum range. It skips lights currently marked as manually controlled, does not repeatedly turn them off while the target remains low, and does not turn them back on later. Startup or re-enabling the profile while already at the minimum is not a new crossing. Sleep mode can also cause a crossing if its brightness is at or below the chosen minimum. Changing sleep mode clears manual control by default; set `reset_manual_control_on_sleep_mode_change: false` if you want to preserve it. For a bedtime-only policy, trigger directly on the sleep-mode switch changing to `on` instead.
 
 </details>
 
@@ -85,6 +148,8 @@ script:
 
 <details markdown="1">
 <summary>Use a Schedule helper as a step-based custom lighting profile.</summary>
+
+Also available as a [blueprint](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/schedule_profile.yaml). Select the main profile switch and your Schedule helper.
 
 Create a [Schedule helper](https://www.home-assistant.io/integrations/schedule/) named `Adaptive Lighting Profile`. Add time blocks with Additional data like this:
 
@@ -134,6 +199,8 @@ This creates step changes at block boundaries. It does not interpolate between s
 
 <details markdown="1">
 <summary>Reduce daytime brightness when an illuminance sensor detects strong daylight.</summary>
+
+Also available as a [blueprint](https://github.com/basnijholt/adaptive-lighting/blob/main/blueprints/automation/daylight_limit.yaml). Select the profile and sensor, then set the lux thresholds and brightness limits. The high lux threshold must exceed the low threshold; the blueprint does nothing if they are reversed or equal.
 
 Keep a low configured `min_brightness` for late night and let an automation lower `max_brightness` while the room has ample daylight. Use a sensor that is not significantly affected by the controlled lights to avoid a feedback loop.
 
