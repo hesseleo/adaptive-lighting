@@ -104,6 +104,7 @@ from .const import (
     CONF_INTERVAL,
     CONF_LIGHTS,
     CONF_MANUAL_CONTROL,
+    CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
     CONF_MAX_BRIGHTNESS,
     CONF_MAX_COLOR_TEMP,
     CONF_MAX_SUNRISE_TIME,
@@ -955,12 +956,14 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         self._send_split_delay = data[CONF_SEND_SPLIT_DELAY]
         self._take_over_control = data[CONF_TAKE_OVER_CONTROL]
         if not data[CONF_TAKE_OVER_CONTROL] and (
-            data[CONF_DETECT_NON_HA_CHANGES] or data[CONF_ADAPT_ONLY_ON_BARE_TURN_ON]
+            data[CONF_DETECT_NON_HA_CHANGES]
+            or data[CONF_ADAPT_ONLY_ON_BARE_TURN_ON]
+            or data[CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON]
         ):
             _LOGGER.warning(
-                "%s: Config mismatch: `detect_non_ha_changes` or `adapt_only_on_bare_turn_on` "
-                "set to `true` requires `take_over_control` to be enabled. Adjusting config "
-                "and continuing setup with `take_over_control: true`.",
+                "%s: Config mismatch: `detect_non_ha_changes`, `adapt_only_on_bare_turn_on`, "
+                "or `manual_control_on_external_turn_on` set to `true` requires `take_over_control` to be "
+                "enabled. Adjusting config and continuing setup with `take_over_control: true`.",
                 self._name,
             )
             self._take_over_control = True
@@ -969,6 +972,9 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         )
         self._detect_non_ha_changes = data[CONF_DETECT_NON_HA_CHANGES]
         self._adapt_only_on_bare_turn_on = data[CONF_ADAPT_ONLY_ON_BARE_TURN_ON]
+        self._manual_control_on_external_turn_on = data[
+            CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON
+        ]
         self._auto_reset_manual_control_time = data[CONF_AUTORESET_CONTROL]
         self._reset_manual_control_on_sleep_mode_change = data[
             CONF_RESET_MANUAL_CONTROL_ON_SLEEP_MODE_CHANGE
@@ -1603,16 +1609,26 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         )
         if (
             self._take_over_control
-            and not self._detect_non_ha_changes
+            and (
+                not self._detect_non_ha_changes
+                or self._manual_control_on_external_turn_on
+            )
             and not from_turn_on
         ):
             # There is an edge case where 2 switches control the same light, e.g.,
             # one for brightness and one for color. Now we will mark both switches
             # as manually controlled, which is not 100% correct.
+            #
+            # This 'off' → 'on' event does not exactly match the most recently tracked
+            # `light.turn_on` context for the entity. Hand control over when either:
+            # - `detect_non_ha_changes` is False (we can't reliably track manual changes
+            #   to already-on lights anyway), or
+            # - `manual_control_on_external_turn_on` is True (the user explicitly wants external
+            #   turn-ons left untouched, even while `detect_non_ha_changes` is enabled).
             _LOGGER.debug(
                 "%s: Ignoring 'off' → 'on' event for '%s' with context.id='%s'"
-                " because 'light.turn_on' was not called by HA and"
-                " 'detect_non_ha_changes' is False",
+                " because it does not match a tracked 'light.turn_on' context and"
+                " ('detect_non_ha_changes' is False or 'manual_control_on_external_turn_on' is True)",
                 self._name,
                 entity_id,
                 event.context.id,

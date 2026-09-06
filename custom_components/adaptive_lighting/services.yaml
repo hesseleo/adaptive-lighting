@@ -238,6 +238,12 @@ change_switch_settings:
       example: false
       selector:
         boolean: null
+    manual_control_on_external_turn_on:
+      description: Treat turn-ons without a matching Home Assistant `light.turn_on` context as manual control. Normal manual-control resets apply. Still allows `detect_non_ha_changes` for already-on lights. Needs `take_over_control` enabled. 🕵️
+      required: false
+      example: false
+      selector:
+        boolean: null
     transition:
       description: Duration of transition when lights change, in seconds. 🕑
       required: false

@@ -100,6 +100,16 @@ DOCS[CONF_ADAPT_ONLY_ON_BARE_TURN_ON] = (
     "Needs `take_over_control` enabled. 🕵️"
 )
 
+CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON, DEFAULT_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON = (
+    "manual_control_on_external_turn_on",
+    False,
+)
+DOCS[CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON] = (
+    "Treat turn-ons without a matching Home Assistant `light.turn_on` context as "
+    "manual control. Normal manual-control resets apply. Still allows "
+    "`detect_non_ha_changes` for already-on lights. Needs `take_over_control` enabled. 🕵️"
+)
+
 CONF_PREFER_RGB_COLOR, DEFAULT_PREFER_RGB_COLOR = "prefer_rgb_color", False
 DOCS[CONF_PREFER_RGB_COLOR] = (
     "Whether to prefer RGB color adjustment over "
@@ -416,6 +426,11 @@ VALIDATION_TUPLES: list[tuple[str, Any, Any]] = [
     ),
     (CONF_ONLY_ONCE, DEFAULT_ONLY_ONCE, bool),
     (CONF_ADAPT_ONLY_ON_BARE_TURN_ON, DEFAULT_ADAPT_ONLY_ON_BARE_TURN_ON, bool),
+    (
+        CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
+        DEFAULT_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
+        bool,
+    ),
     (
         CONF_RESET_MANUAL_CONTROL_ON_SLEEP_MODE_CHANGE,
         DEFAULT_RESET_MANUAL_CONTROL_ON_SLEEP_MODE_CHANGE,
