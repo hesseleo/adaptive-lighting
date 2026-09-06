@@ -38,6 +38,7 @@ from homeassistant.components.adaptive_lighting.const import (
     CONF_INITIAL_TRANSITION,
     CONF_MANUAL_CONTROL,
     CONF_MAX_BRIGHTNESS,
+    CONF_MIN_BRIGHTNESS,
     CONF_MIN_COLOR_TEMP,
     CONF_MULTI_LIGHT_INTERCEPT,
     CONF_PREFER_RGB_COLOR,
@@ -112,6 +113,7 @@ from homeassistant.const import (
     SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
+    EntityCategory,
 )
 from homeassistant.const import __version__ as ha_version
 from homeassistant.core import Context, Event, HomeAssistant, State
@@ -1299,7 +1301,11 @@ async def test_state_change_handlers(hass):
     4. Assert all possible problems that would result.
     Also tests significant changes.
     """
-    switch, (light, *_) = await setup_lights_and_switch(hass)
+    # Keep adaptive brightness distinct from the manual values 20, 40, and 50.
+    switch, (light, *_) = await setup_lights_and_switch(
+        hass,
+        {CONF_MIN_BRIGHTNESS: 50, CONF_MAX_BRIGHTNESS: 50},
+    )
     context = switch.create_context("test")  # needs to be passed to update method
 
     # [Config options]:
@@ -3339,3 +3345,73 @@ def test_validate_yaml_data_wins_over_stray_options():
     result = validate(entry)
 
     assert result[CONF_LIGHTS] == ["light.a"]
+
+
+@pytest.mark.parametrize("service", [SERVICE_TURN_ON, SERVICE_TOGGLE])
+@pytest.mark.parametrize("explicit", [False, True], ids=["area", "direct"])
+@pytest.mark.parametrize("managed", [False, True], ids=["unmanaged", "managed"])
+@pytest.mark.parametrize(
+    "registry_settings",
+    [
+        {},
+        {"entity_category": EntityCategory.CONFIG},
+        {"entity_category": EntityCategory.DIAGNOSTIC},
+        {"hidden_by": entity_registry.RegistryEntryHider.USER},
+    ],
+    ids=["normal", "config", "diagnostic", "hidden"],
+)
+async def test_intercept_preserves_area_target_exclusions(
+    hass: HomeAssistant,
+    service: str,
+    explicit: bool,
+    managed: bool,
+    registry_settings: dict[str, Any],
+):
+    """Area calls exclude hidden/categorized lights; direct calls honor them."""
+    await setup_lights(hass)
+    mock_area_registry(hass)
+    registry = entity_registry.async_get(hass)
+    lights = [ENTITY_LIGHT_1, ENTITY_LIGHT_2, ENTITY_LIGHT_3]
+    for light in lights:
+        registry.async_update_entity(light, area_id="test-area")
+    registry.async_update_entity(ENTITY_LIGHT_3, **registry_settings)
+    await hass.services.async_call(
+        LIGHT_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: lights},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    await setup_switch(
+        hass,
+        {
+            CONF_LIGHTS: (
+                [ENTITY_LIGHT_1, ENTITY_LIGHT_3] if managed else [ENTITY_LIGHT_1]
+            ),
+            CONF_INTERCEPT: True,
+            CONF_INITIAL_TRANSITION: 0,
+            CONF_TRANSITION: 0,
+            CONF_MIN_BRIGHTNESS: 50,
+            CONF_MAX_BRIGHTNESS: 50,
+        },
+    )
+    assert all(hass.states.get(light).state == STATE_OFF for light in lights)
+
+    target = {ATTR_ENTITY_ID: lights} if explicit else {ATTR_AREA_ID: "test-area"}
+    await hass.services.async_call(LIGHT_DOMAIN, service, target, blocking=True)
+    await hass.async_block_till_done()
+
+    # Both normal lights turn on; only the managed one gets adaptive brightness.
+    assert hass.states.get(ENTITY_LIGHT_1).state == STATE_ON
+    assert hass.states.get(ENTITY_LIGHT_1).attributes[ATTR_BRIGHTNESS] == 128
+    assert hass.states.get(ENTITY_LIGHT_2).state == STATE_ON
+    assert hass.states.get(ENTITY_LIGHT_2).attributes.get(ATTR_BRIGHTNESS) != 128
+    target_state = hass.states.get(ENTITY_LIGHT_3)
+    if registry_settings and not explicit:
+        assert target_state.state == STATE_OFF
+    else:
+        assert target_state.state == STATE_ON
+        if managed:
+            assert target_state.attributes[ATTR_BRIGHTNESS] == 128
+        else:
+            assert target_state.attributes.get(ATTR_BRIGHTNESS) != 128

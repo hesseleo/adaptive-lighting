@@ -1859,6 +1859,13 @@ class AdaptiveLightingManager:
         self._context_cnt += 1
         return context
 
+    def _is_excluded_from_area(self, entity_id: str) -> bool:
+        """Match Home Assistant's exclusions for indirect area targets."""
+        entry = entity_registry.async_get(self.hass).async_get(entity_id)
+        return entry is not None and (
+            entry.entity_category is not None or entry.hidden_by is not None
+        )
+
     def _separate_entity_ids(
         self,
         entity_ids: list[str],
@@ -2398,6 +2405,7 @@ class AdaptiveLightingManager:
                     entity_id
                     for entity_id in area_entity_ids
                     if entity_id.startswith(LIGHT_DOMAIN)
+                    and not self._is_excluded_from_area(entity_id)
                 ]
                 entity_ids.extend(eids)
                 _LOGGER.debug(
