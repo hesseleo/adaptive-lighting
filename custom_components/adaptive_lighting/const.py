@@ -283,10 +283,11 @@ DOCS[CONF_MULTI_LIGHT_INTERCEPT] = (
 
 CONF_EXPAND_LIGHT_GROUPS, DEFAULT_EXPAND_LIGHT_GROUPS = "expand_light_groups", True
 DOCS[CONF_EXPAND_LIGHT_GROUPS] = (
-    "Expand light groups to their individual member entities (`true`, default). "
-    "Set to `false` to send adaptation commands to the group entity directly "
-    "instead of its members."
+    "Expand light groups to their members (`true`, default). Set `false` to send "
+    "commands to the group and track manual control for the group. Explicit member "
+    "targets in services stay individual targets."
 )
+
 
 SLEEP_MODE_SWITCH = "sleep_mode_switch"
 ADAPT_COLOR_SWITCH = "adapt_color_switch"
