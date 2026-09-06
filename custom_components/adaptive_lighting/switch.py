@@ -1437,6 +1437,10 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
                 data.context.id,
             )
             light = service_data[ATTR_ENTITY_ID]
+            self.manager.invalidate_manual_control_state(
+                light,
+                get_light_control_attributes(service_data),
+            )
             self.manager.last_service_data[light] = {
                 **self.manager.last_service_data.get(light, {}),
                 **service_data,
@@ -1624,10 +1628,18 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             and not is_our_context(event.context)
         ):
             service_data = self.manager.turn_on_event[entity_id].data[ATTR_SERVICE_DATA]
+            manual_attributes = get_light_control_attributes(service_data)
             if self.manager._mark_manual_control_if_non_bare_turn_on(
                 entity_id,
                 service_data,
             ):
+                new_state = event.data["new_state"]
+                assert new_state is not None
+                self.manager.update_manual_control_state(
+                    entity_id,
+                    new_state,
+                    manual_attributes,
+                )
                 _LOGGER.debug(
                     "Marked attributes from service_data as manually controlled for '%s' "
                     "with context.id='%s'. Continuing to adapt remaining attributes. "
@@ -1802,6 +1814,15 @@ class AdaptiveLightingManager:
         self.our_last_state_on_change: dict[str, list[State]] = {}
         # Track last 'service_data' to 'light.turn_on' resulting from this integration
         self.last_service_data: dict[str, dict[str, Any]] = {}
+        # Track reported states that established manual control of each axis
+        self.last_manual_control_state: dict[
+            str,
+            dict[LightControlAttributes, dict[str, Any]],
+        ] = {}
+        self.pending_manual_control_state: dict[
+            str,
+            dict[LightControlAttributes, str],
+        ] = {}
         # Track ongoing split adaptations to be able to cancel them
         self.adaptation_tasks_brightness: dict[str, asyncio.Task[None]] = {}
         self.adaptation_tasks_color: dict[str, asyncio.Task[None]] = {}
@@ -2382,6 +2403,68 @@ class AdaptiveLightingManager:
         new = current | attributes
         self.set_manual_control_attributes(light, new)
 
+    def invalidate_manual_control_state(
+        self,
+        light: str,
+        attributes: LightControlAttributes,
+    ) -> None:
+        """Stop comparing adapted attributes with an older physical state."""
+        states = self.last_manual_control_state.get(light)
+        pending = self.pending_manual_control_state.get(light)
+        for attribute in LightControlAttributes:
+            if attribute in attributes and states is not None:
+                states.pop(attribute, None)
+            if attribute in attributes and pending is not None:
+                pending.pop(attribute, None)
+        if states == {}:
+            self.last_manual_control_state.pop(light)
+        if pending == {}:
+            self.pending_manual_control_state.pop(light)
+
+    def update_manual_control_state(
+        self,
+        light: str,
+        state: State,
+        attributes: LightControlAttributes,
+    ) -> None:
+        """Record the reported state that established manual control of each axis."""
+        states = self.last_manual_control_state.setdefault(light, {})
+        for attribute in LightControlAttributes:
+            if attribute in attributes:
+                states[attribute] = dict(state.attributes)
+
+    def mark_manual_control_state_pending(
+        self,
+        light: str,
+        attributes: LightControlAttributes,
+        context_id: str,
+    ) -> None:
+        """Wait for the reported state produced by a tracked service call."""
+        pending = self.pending_manual_control_state.setdefault(light, {})
+        for attribute in LightControlAttributes:
+            if attribute in attributes:
+                pending[attribute] = context_id
+
+    def consume_pending_manual_control_state(
+        self,
+        light: str,
+        state: State,
+        context_id: str | None = None,
+    ) -> None:
+        """Record a tracked service's reported state once it is available."""
+        pending = self.pending_manual_control_state.get(light)
+        if pending is None:
+            return
+        attributes = LightControlAttributes.NONE
+        for attribute, pending_context_id in tuple(pending.items()):
+            if context_id is None or context_id == pending_context_id:
+                attributes |= attribute
+                pending.pop(attribute)
+        if not pending:
+            self.pending_manual_control_state.pop(light)
+        if attributes:
+            self.update_manual_control_state(light, state, attributes)
+
     def get_adaption_control_attributes(
         self,
         switch: AdaptiveSwitch,
@@ -2460,6 +2543,8 @@ class AdaptiveLightingManager:
                     light,
                 )
                 self.manual_control[light] = LightControlAttributes.NONE
+                self.last_manual_control_state.pop(light, None)
+                self.pending_manual_control_state.pop(light, None)
                 if timer := self.auto_reset_manual_control_timers.pop(light, None):
                     timer.cancel()
             self.our_last_state_on_change.pop(light, None)
@@ -2615,7 +2700,6 @@ class AdaptiveLightingManager:
             if old_state is not None and old_state.state == STATE_OFF
             else None
         )
-
         if new_on:
             _LOGGER.debug(
                 "Detected a '%s' 'state_changed' event: '%s' with context.id='%s'",
@@ -2660,6 +2744,11 @@ class AdaptiveLightingManager:
                     self.start_transition_timer(entity_id)
             elif last_state is not None:
                 self.our_last_state_on_change[entity_id].append(new_on)
+            self.consume_pending_manual_control_state(
+                entity_id,
+                new_on,
+                new_on.context.id,
+            )
 
         if old_on and new_off:
             # Tracks 'on' → 'off' state changes
@@ -2737,6 +2826,11 @@ class AdaptiveLightingManager:
 
         # Light was already on and 'light.turn_on' was not called by
         # the adaptive_lighting integration.
+        self.mark_manual_control_state_pending(
+            light,
+            turn_on_attributes,
+            turn_on_event.context.id,
+        )
         self.add_manual_control_attributes(light, turn_on_attributes)
         switch.fire_manual_control_event(light, turn_on_event.context)
         _LOGGER.debug(
@@ -2804,14 +2898,29 @@ class AdaptiveLightingManager:
         await async_update_entity(self.hass, light)
         refreshed_state = self.hass.states.get(light)
         assert refreshed_state is not None
+        self.consume_pending_manual_control_state(light, refreshed_state)
 
-        changed_attributes = _attributes_have_changed(
-            old_attributes=last_service_data,
-            new_attributes=refreshed_state.attributes,
-            light=light,
-            context=context,
-        )
+        manual_control = self.get_manual_control_attributes(light)
+        manual_control_states = self.last_manual_control_state.get(light, {})
+        changed_attributes = LightControlAttributes.NONE
+        for attribute in LightControlAttributes:
+            old_attributes = (
+                manual_control_states.get(attribute, last_service_data)
+                if attribute in manual_control
+                else last_service_data
+            )
+            changed_attributes |= attribute & _attributes_have_changed(
+                old_attributes=dict(old_attributes),
+                new_attributes=refreshed_state.attributes,
+                light=light,
+                context=context,
+            )
         if changed_attributes:
+            self.update_manual_control_state(
+                light,
+                refreshed_state,
+                changed_attributes,
+            )
             _LOGGER.debug(
                 "%s: State attributes %s of '%s' changed (%s) wrt 'last_service_data' (%s) (context.id=%s)",
                 switch._name,
