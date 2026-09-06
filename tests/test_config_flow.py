@@ -13,8 +13,10 @@ from homeassistant.components.adaptive_lighting.const import (
     BASIC_OPTIONS,
     CONF_EXPAND_LIGHT_GROUPS,
     CONF_INITIAL_TRANSITION,
+    CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
     CONF_SUNRISE_TIME,
     CONF_SUNSET_TIME,
+    DEFAULT_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
     DEFAULT_NAME,
     DOMAIN,
     NONE_STR,
@@ -151,6 +153,10 @@ async def test_options_schema_has_each_setting_once(hass):
     advanced = _advanced_section(result)
 
     assert advanced.options == {"collapsed": True}
+    assert (
+        _schema_defaults(advanced.schema)[CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON]
+        is DEFAULT_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON
+    )
     assert {key.schema for key in schema if key.schema != "advanced"} == BASIC_OPTIONS
     assert {key.schema for key in advanced.schema.schema} == set(
         DEFAULT_DATA,

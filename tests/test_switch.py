@@ -40,6 +40,7 @@ from homeassistant.components.adaptive_lighting.const import (
     CONF_EXPAND_LIGHT_GROUPS,
     CONF_INITIAL_TRANSITION,
     CONF_MANUAL_CONTROL,
+    CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON,
     CONF_MAX_BRIGHTNESS,
     CONF_MAX_COLOR_TEMP,
     CONF_MIN_BRIGHTNESS,
@@ -4862,6 +4863,152 @@ async def test_automation_turn_on_from_off_not_marked_as_manual_control(hass):
         f"Lights turned on from OFF by automations should NOT be marked as "
         f"manually controlled - only lights that were already ON and then had "
         f"their brightness/color changed externally should be marked as such."
+    )
+
+
+@pytest.mark.parametrize("intercept", [True, False])
+async def test_manual_control_on_external_turn_on_allows_tracked_service_call(
+    hass,
+    intercept,
+):
+    """Test a real HA turn-on remains eligible for initial adaptation."""
+    switch, _ = await setup_lights_and_switch(
+        hass,
+        {
+            CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON: True,
+            CONF_DETECT_NON_HA_CHANGES: True,
+            CONF_INTERCEPT: intercept,
+            CONF_MIN_BRIGHTNESS: 50,
+            CONF_MAX_BRIGHTNESS: 50,
+        },
+    )
+    await hass.services.async_call(
+        LIGHT_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: ENTITY_LIGHT_1},
+        blocking=True,
+    )
+
+    await hass.services.async_call(
+        LIGHT_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: ENTITY_LIGHT_1, ATTR_BRIGHTNESS: 200},
+        blocking=True,
+        context=Context(id=f"ha_turn_on_{intercept}"),
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(ENTITY_LIGHT_1)
+    assert state.state == STATE_ON
+    assert state.attributes[ATTR_BRIGHTNESS] == 128
+    assert (
+        switch.manager.get_manual_control_attributes(ENTITY_LIGHT_1)
+        == LightControlAttributes.NONE
+    )
+
+
+@pytest.mark.parametrize("intercept", [True, False])
+@pytest.mark.parametrize(
+    (
+        "manual_control_on_external_turn_on",
+        "detect_non_ha_changes",
+        "expected_manual_control",
+        "expected_adaptation",
+    ),
+    [
+        (True, True, LightControlAttributes.ALL, False),
+        (True, False, LightControlAttributes.ALL, False),
+        (False, True, LightControlAttributes.NONE, True),
+        (False, False, LightControlAttributes.ALL, False),
+    ],
+)
+async def test_manual_control_on_external_turn_on_external_state_change(
+    hass,
+    freezer,
+    intercept,
+    manual_control_on_external_turn_on,
+    detect_non_ha_changes,
+    expected_manual_control,
+    expected_adaptation,
+):
+    """Test an unmatched off-to-on state event follows the opt-in policy."""
+    switch, _ = await setup_lights_and_switch(
+        hass,
+        {
+            "manual_control_on_external_turn_on": manual_control_on_external_turn_on,
+            CONF_DETECT_NON_HA_CHANGES: detect_non_ha_changes,
+            CONF_INTERCEPT: intercept,
+            CONF_MIN_BRIGHTNESS: 50,
+            CONF_MAX_BRIGHTNESS: 50,
+        },
+    )
+    external_attributes = dict(hass.states.get(ENTITY_LIGHT_1).attributes)
+    external_attributes[ATTR_BRIGHTNESS] = 200
+    hass.states.async_set(
+        ENTITY_LIGHT_1,
+        STATE_OFF,
+        external_attributes,
+        context=Context(id=f"unmatched_turn_off_{intercept}"),
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(ENTITY_LIGHT_1).state == STATE_OFF
+    freezer.tick(6)
+
+    hass.states.async_set(
+        ENTITY_LIGHT_1,
+        STATE_ON,
+        external_attributes,
+        context=Context(id=f"unmatched_turn_on_{intercept}"),
+    )
+    await hass.async_block_till_done()
+
+    assert (
+        switch.manager.get_manual_control_attributes(ENTITY_LIGHT_1)
+        == expected_manual_control
+    )
+    last_service_data = switch.manager.last_service_data.get(ENTITY_LIGHT_1)
+    if expected_adaptation:
+        assert last_service_data[ATTR_BRIGHTNESS] == 128
+    else:
+        assert last_service_data is None
+        assert hass.states.get(ENTITY_LIGHT_1).attributes[ATTR_BRIGHTNESS] == 200
+
+
+@pytest.mark.parametrize("intercept", [True, False])
+async def test_manual_control_on_external_turn_on_keeps_non_ha_change_detection(
+    hass,
+    intercept,
+):
+    """Test the option does not disable manual tracking for an on light."""
+    switch, (light, *_) = await setup_lights_and_switch(
+        hass,
+        {
+            CONF_MANUAL_CONTROL_ON_EXTERNAL_TURN_ON: True,
+            CONF_DETECT_NON_HA_CHANGES: True,
+            CONF_INTERCEPT: intercept,
+            CONF_MIN_BRIGHTNESS: 50,
+            CONF_MAX_BRIGHTNESS: 50,
+        },
+    )
+    await switch._update_attrs_and_maybe_adapt_lights(
+        context=switch.create_context("test"),
+        transition=0,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(ENTITY_LIGHT_1).attributes[ATTR_BRIGHTNESS] == 128
+
+    set_light_brightness(light, 200)
+    light.async_write_ha_state()
+    await switch._update_attrs_and_maybe_adapt_lights(
+        context=switch.create_context("test"),
+        transition=0,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(ENTITY_LIGHT_1).attributes[ATTR_BRIGHTNESS] == 200
+    assert (
+        switch.manager.get_manual_control_attributes(ENTITY_LIGHT_1)
+        == LightControlAttributes.BRIGHTNESS
     )
 
 
