@@ -1514,6 +1514,15 @@
       "contributions": [
         "ideas"
       ]
+    },
+    {
+      "login": "abkslm",
+      "name": "Andrew Blakeslee Moore",
+      "avatar_url": "https://avatars.githubusercontent.com/u/60765958?v=4",
+      "profile": "http://blakeslee.me",
+      "contributions": [
+        "bug"
+      ]
     }
   ],
   "contributorsPerLine": 7,
