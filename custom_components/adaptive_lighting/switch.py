@@ -1672,6 +1672,10 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         if self._adapt_delay > 0:
             await asyncio.sleep(self._adapt_delay)
 
+        # Runtime settings may retire this profile's target while the event waits.
+        if entity_id not in self.lights:
+            return
+
         await self._update_attrs_and_maybe_adapt_lights(
             context=self.create_context("light_event", parent=event.context),
             lights=[entity_id],

@@ -3896,6 +3896,81 @@ async def test_group_runtime_expansion_restores_targets(hass, shared_member, cle
         assert manager.manual_control["light.light_4"] == LightControlAttributes.ALL
 
 
+@pytest.mark.parametrize("expand", [False, True])
+@pytest.mark.parametrize("shared_target", [False, True])
+async def test_group_runtime_change_retires_delayed_events(
+    hass,
+    expand,
+    shared_target,
+    cleanup,
+):
+    """Delayed reactive handlers must not command targets this profile retired."""
+    await setup_lights(hass, with_group=True)
+    _, switch = await _setup_group_switch(
+        hass,
+        expand_light_groups=expand,
+        adapt_delay=0.1234,
+    )
+    retained_target = "light.light_4" if expand else "light.light_group"
+    if shared_target:
+        _, other = await _setup_group_switch(
+            hass,
+            name="retained",
+            lights=[retained_target],
+            expand_light_groups=False,
+        )
+        await other.async_turn_off()
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_sleep = asyncio.sleep
+    delayed_count = 0
+
+    async def controlled_sleep(delay, *args, **kwargs):
+        nonlocal delayed_count
+        if delay == 0.1234:
+            delayed_count += 1
+            if delayed_count == (2 if expand else 1):
+                entered.set()
+            await release.wait()
+        else:
+            await original_sleep(delay, *args, **kwargs)
+
+    calls = _track_adaptive_light_calls(hass)
+    with patch.object(asyncio, "sleep", controlled_sleep):
+        try:
+            await hass.services.async_call(
+                LIGHT_DOMAIN,
+                SERVICE_TURN_ON,
+                {ATTR_ENTITY_ID: "light.light_group"},
+                blocking=True,
+            )
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_CHANGE_SWITCH_SETTINGS,
+                {
+                    ATTR_ENTITY_ID: switch.entity_id,
+                    CONF_EXPAND_LIGHT_GROUPS: not expand,
+                },
+                blocking=True,
+            )
+            expected = (
+                ["light.light_group"] if expand else ["light.light_4", "light.light_5"]
+            )
+            assert switch.lights == expected
+            assert switch.manager.lights == set(expected) | (
+                {retained_target} if shared_target else set()
+            )
+            calls.clear()
+        finally:
+            release.set()
+            await hass.async_block_till_done()
+
+    assert not calls, f"Retired reactive handlers issued commands: {calls}"
+    for member in ["light.light_4", "light.light_5"]:
+        assert hass.states.get(member).attributes[ATTR_BRIGHTNESS] == 128
+
+
 @pytest.mark.parametrize("trigger", ["turn_on", "autoreset"])
 async def test_group_mixed_profiles_preserve_tracking(hass, trigger, cleanup):
     """Expanding one profile must not remove another profile's group tracking."""
